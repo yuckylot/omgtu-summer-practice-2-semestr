@@ -35,6 +35,12 @@
 //
 // Вычисление определенного интеграла
 //
+#r "nuget: xunit, 2.8.1"
+
+using System;
+using System.Threading;
+using System.Linq;
+
 class DefiniteIntegral
 {
     //
@@ -44,15 +50,51 @@ class DefiniteIntegral
     // threadsNumber - число потоков, которые используются для вычислений
     //
     public static double Solve(double a, double b, Func<double, double> function, double step, int threadsnumber)
-    {
-        // отсюда надо начинать реализацию задачи
-        return 0.0;
+    { 
+        object locker = new object();
+        double result = 0;
+        Barrier barrier = new Barrier(threadsnumber + 1, (b) =>
+        {
+            Console.WriteLine("All threads have reached the barrier.");
+        });
+
+        void ThreadMethod(double at, double bt, Func<double, double> ft, double stept, int number) {
+           
+
+            int n = Convert.ToInt32(Math.Floor((bt - at)/stept));
+            
+            double threadResult = (ft(at)/2 + Enumerable.Range(1, n-1).Select((i)=> ft(at+(i*stept))).Sum() + ft(bt)/2)*stept;
+
+
+            lock (locker) {
+                result += threadResult;
+            }
+
+            Console.WriteLine($"On thread {number}: " + threadResult + " " + $"From: {at} to {bt}");
+            barrier.SignalAndWait();
+        }
+
+       
+
+        Thread[] threads = new Thread[threadsnumber];
+        
+        int countStepsOnThread = Convert.ToInt32(Math.Floor((b-a)/step))/threadsnumber; 
+            
+        for (int i = 0; i < threadsnumber; i++) {
+            double at = a + i *(countStepsOnThread * step); 
+            double bt = a + (i+1) *(countStepsOnThread * step);
+            threads[i] = new Thread(() => ThreadMethod(at, bt, function, step, i));
+            threads[i].Start();
+        }
+
+        barrier.SignalAndWait();
+
+        Console.WriteLine(result);
+        return result;
     }
 }
 
 #!csharp
-
-#r "nuget: xunit, 2.8.1"
 
 using Xunit;
 
@@ -63,4 +105,4 @@ Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, X, 1e-4, 2), 1e-4);
 
 Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, SIN, 1e-5, 8), 1e-4);
 
-Assert.Equal(10, DefiniteIntegral.Solve(0, 10, X, 1e-6, 8), 1e-5);
+Assert.Equal(50, DefiniteIntegral.Solve(0, 10, X, 1e-6, 8), 1e-5);
