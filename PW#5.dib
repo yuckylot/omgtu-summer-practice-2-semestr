@@ -55,12 +55,81 @@ class Message
 
 #!csharp
 
+using System;
+using System.Threading;
 using System.Collections.Concurrent;
 
 var queue1 = new BlockingCollection<Message>(2); //очередь первого потока
 var queue2 = new BlockingCollection<Message>(2); //очередь второго потока
 
-// Здесь писать решение
+int threadsnumber = 2;
+Thread[] threads = new Thread[threadsnumber];
+
+Barrier barrier = new Barrier(threadsnumber + 1, (b) =>
+{ 
+    Console.WriteLine("All threads have reached the barrier.");
+});
+
+void Ping(Barrier barrier,ref BlockingCollection<Message> queue1, ref BlockingCollection<Message> queue2, ref int flag1, ref int flag2) {
+    int handledMes = 0;
+    while(true) {
+        if(queue1.Count != 0) {
+            Message received = queue1.Take();
+            received.Handle();
+        }
+
+        if(handledMes < 100) {
+            queue2.Add(new Message());
+            handledMes += 1;
+        }
+
+        if(handledMes == 100 && flag1 == 0) {
+            Interlocked.Increment(ref flag1);
+        }
+        
+        if (handledMes == 100 && queue1.Count == 0 && flag2 == 1) {
+            break;            
+        }
+    }
+    barrier.SignalAndWait();
+}
+
+void Pong(Barrier barrier,ref BlockingCollection<Message> queue1, ref BlockingCollection<Message> queue2, ref int flag1, ref int flag2) {
+    int handledMes = 0;
+    while(true) {
+        if(queue2.Count != 0) {
+            Message received = queue2.Take();
+            received.Handle();
+        }
+
+        if(handledMes < 100) {
+            queue1.Add(new Message());
+            handledMes += 1;
+        }
+
+        if(handledMes == 100 && flag2 == 0) {
+            Interlocked.Increment(ref flag2);
+        }
+        
+        if (handledMes == 100 && queue2.Count == 0 && flag1 == 1) {
+            break;            
+        }
+    }
+    barrier.SignalAndWait();
+}
+
+
+
+threads[0] = new Thread(() => Ping(barrier, ref queue1, ref queue2,ref flag1, ref flag2));
+threads[0].Start();
+threads[1] = new Thread(() => Pong(barrier, ref queue1, ref queue2, ref flag1, ref flag2));
+threads[1].Start();
+
+int flag1 = 0;
+int flag2 = 0;
+
+
+barrier.SignalAndWait();
 
 #!csharp
 
