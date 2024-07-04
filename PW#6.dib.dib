@@ -41,6 +41,207 @@
 
 // здесь писать код
 
+#!csharp
+
+using System;
+using System.Threading;
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using Microsoft.DotNet.Interactive.Formatting;
+
+static ManualResetEvent ThreadChecker1 = new ManualResetEvent(false);
+static ManualResetEvent ThreadChecker2 = new ManualResetEvent(false);
+
+// Установка ScottPlot NuGet package
+// #r "nuget:ScottPlot, 5.0.*"
+
+// Настройка ScottPlot
+
+Formatter.Register(typeof(ScottPlot.Plot), (p, w) => 
+    w.Write(((ScottPlot.Plot)p).GetImageHtml(400, 300)), HtmlFormatter.MimeType);
+
+ScottPlot.Plot plt = new();
+
+#!csharp
+
+//Обычная очередь
+double[] SqTimeData = new double[10];
+for(int x = 0; x < 10; x ++)
+{
+    Stopwatch SQhandle = new Stopwatch();
+    Stopwatch SQread = new Stopwatch();
+    Stopwatch SQwrite = new Stopwatch();
+    Queue<int> simple_queue = new Queue<int>();
+    SQhandle.Start();
+    SQwrite.Start();
+    for(int i = 0; i < 1_000_000; i ++)
+    {
+        simple_queue.Enqueue(i);
+    }
+    SQwrite.Stop();
+    SQread.Start();
+    for(int i = 0; i < 1_000_000; i ++)
+    {
+        int msg = simple_queue.Dequeue();
+    }
+    SQread.Stop();
+    SQhandle.Stop();
+    Console.WriteLine($"Обычная очередь (время записи, чтения, обработки) тест #{x+1}: {SQwrite.Elapsed.TotalMilliseconds}, {SQread.Elapsed.TotalMilliseconds}, {SQhandle.Elapsed.TotalMilliseconds}");
+    SqTimeData[x] = SQhandle.Elapsed.TotalMilliseconds;
+}
+
+#!csharp
+
+//BlockingCollection
+double[] BcTimeDataGlobal = new double[10];
+
+for(int x = 0; x < 10; x ++)
+{
+    var queue = new BlockingCollection<int>();
+    Stopwatch BChandle = new Stopwatch();
+
+    Thread writerThread = new Thread(() => WriteToQueue(queue));
+    Thread readerThread = new Thread(() => ReadFromQueue(queue));
+
+    writerThread.Start();
+    readerThread.Start();
+
+    Console.WriteLine($"Тест #{x+1}");
+    
+    ThreadChecker1.Set();
+    ThreadChecker2.Set();
+
+    BChandle.Start();
+
+    writerThread.Join();
+    readerThread.Join();
+    
+    BChandle.Stop();
+
+    Console.WriteLine($"Общее время обработки {BChandle.Elapsed.TotalMilliseconds}");
+
+    ThreadChecker1.Reset();
+    ThreadChecker2.Reset();
+    BcTimeDataGlobal[x] = BChandle.Elapsed.TotalMilliseconds;
+
+    
+    static void WriteToQueue(BlockingCollection<int> queue)
+    {
+        ThreadChecker2.WaitOne();
+        Stopwatch stopwatch1 = Stopwatch.StartNew();
+
+        for (int i = 0; i < 1_000_000; i++)
+        {
+            queue.Add(i);
+        }
+
+        stopwatch1.Stop();
+        Console.WriteLine($"Время записи в BlockingCollection: {stopwatch1.Elapsed.TotalMilliseconds}");
+    }
+
+    static void ReadFromQueue(BlockingCollection<int> queue)
+    {
+        ThreadChecker1.WaitOne();
+        Stopwatch stopwatch2 = Stopwatch.StartNew();
+        int value;
+        int counter = 0;
+        while(counter < 1_000_000)
+        {
+            if(queue.TryTake(out value))
+            {
+                counter += 1;
+            }
+        }
+        stopwatch2.Stop();
+        Console.WriteLine($"Время чтения из BlockingCollection: {stopwatch2.Elapsed.TotalMilliseconds}");
+    }
+    
+}
+
+#!csharp
+
+//ConcurrentQueue
+double[] CqTimeDataGlobal = new double[10];
+for(int x = 0; x < 10; x ++)
+{
+    var queue = new ConcurrentQueue<int>();
+    Stopwatch CQglobal = new Stopwatch();
+
+    var writerThread = new Thread(() => WriteToQueue(queue));
+    writerThread.Start();
+    var readerThread = new Thread(() => ReadFromQueue(queue));
+    readerThread.Start();
+    Console.WriteLine($"Тест #{x+1}");
+
+    ThreadChecker1.Set();
+    ThreadChecker2.Set();
+    CQglobal.Start();
+
+    writerThread.Join();
+    readerThread.Join();
+    CQglobal.Stop();
+
+    Console.WriteLine($"Общее время обработки {CQglobal.Elapsed.TotalMilliseconds}");
+
+    ThreadChecker1.Reset();
+    ThreadChecker2.Reset();
+
+    CqTimeDataGlobal[x] = CQglobal.Elapsed.TotalMilliseconds;
+
+    
+    static void WriteToQueue(ConcurrentQueue<int> queue)
+    {
+        ThreadChecker2.WaitOne();
+        Stopwatch stopwatch1 = Stopwatch.StartNew();
+
+        for (int i = 0; i < 1_000_000; i++)
+        {
+            queue.Enqueue(i);
+        }
+
+        stopwatch1.Stop();
+        Console.WriteLine($"Время записи в ConcurrentQueue: {stopwatch1.Elapsed.TotalMilliseconds}");
+    }
+
+    static void ReadFromQueue(ConcurrentQueue<int> queue)
+    {
+        ThreadChecker1.WaitOne();
+        Stopwatch stopwatch2 = Stopwatch.StartNew();
+        int value;
+        for (int i = 0; i < 1_000_000; i++) {
+            queue.TryDequeue(out value);
+        }
+
+        stopwatch2.Stop();
+        Console.WriteLine($"Время чтения из ConcurrentQueue: {stopwatch2.Elapsed.TotalMilliseconds}");
+    }
+    
+}
+
+#!csharp
+
+// Создание графика
+
+
+plt.Add.Scatter(new int[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, SqTimeData);
+plt.Add.Scatter(new int[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, BcTimeDataGlobal);
+plt.Add.Scatter(new int[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, CqTimeDataGlobal);
+
+Console.WriteLine($"Среднее время обработки 1_000_000 значений с помощью непотокобезопасной очереди {SqTimeData.Sum()/10}");
+Console.WriteLine($"Среднее время обработки 1_000_000 значений с помощью BlockingCollection {BcTimeDataGlobal.Sum()/10}");
+Console.WriteLine($"Среднее время обработки 1_000_000 значений с помощью ConcurrentQueue {CqTimeDataGlobal.Sum()/10}");
+
+plt
+
 #!markdown
 
 ## Вывод
+
+Из блока с построение графика мы получили:
+
+    непотокобезопасной очереди ~ 24.32879 ms
+    BlockingCollection ~ 220.0631 ms
+    ConcurrentQueue ~ 15.25043 ms
+
+Самой быстрой потокобезопасной очередью является ConcurrentQueue со средним временем обработки ~15 мс.
+На фоне непотокобезопасной очереди это дополнительные ~59% эффективности
