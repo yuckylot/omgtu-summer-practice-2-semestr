@@ -38,3 +38,146 @@ ServerThread может менять свое поведение для обра
 Отсутствие Команд в очереди потока не должно требовать значительных затрат процессорного времени. Значительными считаются затраты, которые зависят от времени простоя потока.
 
 Написать проверку, которая гарантирует правильное выполнение команд HardStop и SoftStop.
+
+#!csharp
+
+using System;
+using System.Collections.Concurrent;
+using System.Threading;
+
+#!csharp
+
+public class ServerThread {
+
+    private ConcurrentQueue<ICommand> commands = new ConcurrentQueue<ICommand>();
+    private bool hardStop = false;
+    private bool softStop = false;
+    public bool isRunning = true;
+
+    public int id { get; set; }
+
+    public void Start() {
+        Thread thread = new Thread(Run);
+        thread.Start();
+        id = thread.ManagedThreadId;
+    }
+
+    public void AddToQueue(ICommand command) {    
+        if (command is HardStopCommand) {
+            Console.WriteLine($"Queue coinains {commands.Count()} commands");
+            commands.Clear();
+            Console.WriteLine("HardStop");
+            commands.Enqueue(command);
+        }        
+        else {
+            commands.Enqueue(command);
+        }
+    }
+
+    public void HardStop() {
+        hardStop = true;
+    }
+
+    public void SoftStop() {
+        softStop = true;
+    }
+
+    private void Run()
+    {
+        while(!hardStop)
+        {
+            if(commands.TryDequeue(out ICommand command)) {
+                command.Execute();                
+            }
+            else {
+                if(softStop) {
+                    Console.WriteLine($"Queue contains {commands.Count()} elements");
+                    Console.WriteLine("SoftStop");
+                    isRunning = false;
+                    break;
+                }
+                else {
+                    Thread.Sleep(100);
+                    continue;
+                }
+            }
+        }
+        isRunning = false;
+    }
+    
+}
+
+
+public class HardStopCommand : ICommand {
+
+    private ServerThread thread;
+
+    public HardStopCommand(ServerThread thread) {
+        this.thread = thread;
+    }
+
+    public void Execute() {
+        if(Thread.CurrentThread.ManagedThreadId == thread.id) {
+            thread.HardStop();
+        }
+        else {
+            throw new ("HardStop can only be executed in the thread it is stopping");
+        }
+    }
+}
+
+public class SoftStopCommand : ICommand {
+    
+    private ServerThread thread;
+
+    public SoftStopCommand(ServerThread thread) {
+        this.thread = thread;
+    }
+
+    public void Execute() {
+        if(Thread.CurrentThread.ManagedThreadId == thread.id) {
+            thread.SoftStop();
+        }
+        else {
+            throw new ("SoftStop can only be executed in the thread it is stopping");
+        }
+    }
+}
+
+public class BasicCommand : ICommand {
+
+    public void Execute() {
+        int result = 0;
+        for(int i = 0; i < 100000; i ++) {
+            result += i;
+        }
+        Console.WriteLine($"Basic result {result}");
+
+    }
+}
+
+#!csharp
+
+ServerThread thread = new ServerThread();
+thread.Start();
+for(int i = 0; i < 10; i ++) {
+    thread.AddToQueue(new BasicCommand());
+}
+thread.AddToQueue(new SoftStopCommand(thread));
+while(thread.isRunning) {
+    Thread.Sleep(100);
+}
+Console.WriteLine("All threads finished work");
+
+#!csharp
+
+ServerThread thread = new ServerThread();
+thread.Start();
+for(int i = 0; i < 10; i ++) {
+    thread.AddToQueue(new BasicCommand());
+}
+thread.AddToQueue(new HardStopCommand(thread));
+while(thread.isRunning) {
+    Thread.Sleep(100);
+}
+Console.WriteLine("All threads finished work");
