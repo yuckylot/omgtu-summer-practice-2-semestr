@@ -35,9 +35,17 @@
 
 #!csharp
 
+public interface ICommand
+{
+    void Execute();
+    bool IsCompleted();
+}
+
+#!csharp
+
 public interface IScheduler
 {
-    bool HasCommand()
+    bool HasCommand();
     ICommand Select();
     void Add(ICommand cmd);
 }
@@ -55,3 +63,227 @@ public interface IScheduler
 Необходимо учесть этот момент при реализации очереди.
 
 2. Для обепечения справедливости стратегии планировщика в слабом смысле использовать стратегию Round Robbin (циклическую) для определения следующего потока на исполнение.
+
+#!csharp
+
+using System;
+using System.Collections.Concurrent;
+using System.Threading;
+
+#!csharp
+
+public class RoundRobinScheduler : IScheduler
+{
+    private ConcurrentQueue<ICommand> commandQueue = new ConcurrentQueue<ICommand>();
+    private readonly object lockObject = new object();
+
+    public bool HasCommand()
+    {
+        return commandQueue.Count() > 0;
+    }
+
+    public ICommand Select()
+    {
+        lock (lockObject)
+        {
+            if (commandQueue.TryDequeue(out ICommand cmd))
+            {
+                return cmd;
+            }
+            return null;
+        }
+    }
+
+    public void Add(ICommand cmd)
+    {
+        commandQueue.Enqueue(cmd);
+    }
+}
+
+#!csharp
+
+public class ServerThread {
+
+    private ConcurrentQueue<ICommand> commands = new ConcurrentQueue<ICommand>();
+    private IScheduler scheduler = new RoundRobinScheduler();
+    private bool useScheduler = true;
+    private bool hardStop = false;
+    private bool softStop = false;
+    public bool isRunning = true;
+
+    public int id { get; set; }
+
+    public void Start() {
+        Thread thread = new Thread(Run);
+        thread.Start();
+        id = thread.ManagedThreadId;
+    }
+
+    public void AddToQueue(ICommand command) {    
+        if (command is HardStopCommand) {
+            Console.WriteLine($"Queue coinains {commands.Count()} commands");
+            commands.Clear();
+            Console.WriteLine("HardStop");
+            commands.Enqueue(command);
+        }        
+        else {
+            commands.Enqueue(command);
+        }
+    }
+
+    public void HardStop() {
+        hardStop = true;
+    }
+
+    public void SoftStop() {
+        softStop = true;
+    }
+
+    private void Run()
+    {
+        while(!hardStop)
+        {
+             if (scheduler.HasCommand() && (useScheduler || !(commands.Count() > 0)))
+            {
+                var command = scheduler.Select();
+                if (command != null)
+                {
+                    command.Execute();
+                    if (!command.IsCompleted())
+                    {
+                        scheduler.Add(command);
+                    }
+                }
+                useScheduler = false;
+            }
+            else if (commands.TryDequeue(out ICommand command))
+            {
+                command.Execute();
+                if (!command.IsCompleted())
+                {
+                    scheduler.Add(command);
+                }
+                useScheduler = true;
+            }
+            else
+            {
+                if(softStop){break;}
+                Thread.Sleep(100);
+                useScheduler = true;
+            }
+        }
+        isRunning = false;
+    }
+    
+}
+
+
+public class HardStopCommand : ICommand {
+
+    private ServerThread thread;
+
+    public HardStopCommand(ServerThread thread) {
+        this.thread = thread;
+    }
+
+    public void Execute() {
+        if(Thread.CurrentThread.ManagedThreadId == thread.id) {
+            thread.HardStop();
+        }
+        else {
+            throw new ("HardStop can only be executed in the thread it is stopping");
+        }
+    }
+    public bool IsCompleted() {
+        return true;
+    } 
+}
+
+public class SoftStopCommand : ICommand {
+    
+    private ServerThread thread;
+
+    public SoftStopCommand(ServerThread thread) {
+        this.thread = thread;
+    }
+
+    public void Execute() {
+        if(Thread.CurrentThread.ManagedThreadId == thread.id) {
+            thread.SoftStop();
+        }
+        else {
+            throw new ("SoftStop can only be executed in the thread it is stopping");
+        }
+    }
+    public bool IsCompleted() {
+        return true;
+    } 
+}
+
+public class BasicCommand : ICommand {
+
+    public void Execute() {
+        int result = 0;
+        for(int i = 0; i < 100000; i ++) {
+            result += i;
+        }
+        Console.WriteLine($"Basic result {result}");
+
+    }
+    public bool IsCompleted() {
+        return true;
+    } 
+}
+
+#!csharp
+
+public class LongRunningCommand : ICommand
+{
+    private int steps = 10;
+    private int currentStep = 0;
+
+    public void Execute() {
+
+        if (currentStep < steps) {
+
+            currentStep++ ;
+            Console.WriteLine($"Executing step {currentStep} of long running command");
+        }
+    }
+
+    public bool IsCompleted() {
+        return currentStep >= steps;
+    } 
+}
+
+#!csharp
+
+ServerThread sr_thread = new ServerThread();
+sr_thread.Start();
+sr_thread.AddToQueue(new LongRunningCommand());
+for(int i = 0; i < 10; i ++)
+{
+    sr_thread.AddToQueue(new BasicCommand());
+}
+sr_thread.AddToQueue(new SoftStopCommand(sr_thread));
+while(sr_thread.isRunning)
+{
+    Thread.Sleep(100);
+}
+Console.WriteLine("All threads finished work");
+
+#!csharp
+
+ServerThread sr_thread = new ServerThread();
+sr_thread.Start();
+sr_thread.AddToQueue(new LongRunningCommand());
+for(int i = 0; i < 10; i ++)
+{
+    sr_thread.AddToQueue(new BasicCommand());
+}
+sr_thread.AddToQueue(new HardStopCommand(sr_thread));
+while(sr_thread.isRunning)
+{
+    Thread.Sleep(100);
+}
+Console.WriteLine("All threads finished work");
